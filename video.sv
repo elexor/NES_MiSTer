@@ -4,15 +4,27 @@
 module video
 (
 	input        clk,
+	input        reset,
+	input  [1:0] cnt,
 	input  [5:0] color,
 	input  [8:0] count_h,
 	input  [8:0] count_v,
 	input        forced_scandoubler,
 	input  [2:0] scale,
 	input        hide_overscan,
-	input  [2:0] palette,
+	input  [3:0] palette,
+	input  [2:0] emphasis,
+	input  [1:0] reticle,
+	input        pal_video,
+
+	input        load_color,
+	input [14:0] load_color_data,
+	input  [5:0] load_color_index,
+
+	inout [21:0] gamma_bus,
 
 	output       ce_pix,
+	output   reg hold_reset,
 
 	output       VGA_HS,
 	output       VGA_VS,
@@ -23,13 +35,11 @@ module video
 );
 
 reg pix_ce, pix_ce_n;
+wire [5:0] color_ef = reticle[0] ? (reticle[1] ? 6'h21 : 6'h15) : is_padding ? 6'd63 : color;
 
 always @(negedge clk) begin
-	reg [3:0] cnt = 0;
-
-	cnt <= cnt + 1'd1;
-	pix_ce   <= !cnt[3] & !cnt[2:0];
-	pix_ce_n <=  cnt[3] & !cnt[2:0];
+	pix_ce   <= ~cnt[1] & ~cnt[0];
+	pix_ce_n <=  cnt[1] & ~cnt[0];
 end
 
 // Smooth palette from FirebrandX
@@ -129,6 +139,89 @@ wire [15:0] pal_wavebeam_lut[64] = '{
 	'h539D, 'h53BA, 'h5BD7, 'h67D6, 'h7BB6, 'h5EF7, 'h0000, 'h0000
 };
 
+// Real by Squire
+wire [15:0] pal_real_lut[64] = '{
+	'h35AD, 'h4480, 'h5400, 'h4808, 'h380E, 'h200F, 'h000E, 'h004C,
+	'h0088, 'h00C6, 'h0140, 'h2100, 'h3100, 'h0000, 'h0842, 'h0842,
+	'h5EF7, 'h6D64, 'h7CE7, 'h7890, 'h6018, 'h385A, 'h109A, 'h0915,
+	'h014F, 'h018B, 'h0220, 'h35C0, 'h4DC0, 'h1084, 'h0842, 'h0842,
+	'h7FFF, 'h7E89, 'h7E31, 'h7DB8, 'h7D5F, 'h5D9F, 'h3DFF, 'h1E5F,
+	'h02BB, 'h1334, 'h2769, 'h5325, 'h7703, 'h2D6B, 'h0842, 'h0842,
+	'h7FFF, 'h7F56, 'h7F18, 'h7EFD, 'h7EDF, 'h76FF, 'h631F, 'h575F,
+	'h4BBF, 'h53DE, 'h63F8, 'h7BD5, 'h7FB4, 'h6318, 'h1084, 'h0842
+};
+
+// Sony CXA by FirebrandX
+wire [15:0] pal_sonycxa_lut[64] = '{
+	'h2D6B, 'h4480, 'h4C40, 'h4005, 'h280B, 'h080F, 'h002F, 'h006B,
+	'h00A6, 'h00E1, 'h00E0, 'h10E0, 'h2CC0, 'h0000, 'h0000, 'h0000,
+	'h5294, 'h7540, 'h7CE2, 'h70AC, 'h4C75, 'h207A, 'h00BA, 'h0115,
+	'h016D, 'h01C5, 'h01E0, 'h29E0, 'h55A0, 'h0000, 'h0000, 'h0000,
+	'h7FFF, 'h7E83, 'h7E2B, 'h7DD6, 'h799F, 'h499F, 'h1DDF, 'h065F,
+	'h02D8, 'h0B2F, 'h2747, 'h5342, 'h7EE0, 'h2108, 'h0000, 'h0000,
+	'h7FFF, 'h7F74, 'h7F37, 'h7F1C, 'h7EFF, 'h6AFF, 'h571F, 'h475F,
+	'h437D, 'h4BB8, 'h5BB5, 'h6FB2, 'h7F92, 'h56B5, 'h0000, 'h0000
+};
+
+// YUV from Nestopia
+wire [15:0] pal_yuv_lut[64] = '{
+	'h318C, 'h44A0, 'h5042, 'h5007, 'h3C0B, 'h200D, 'h000D, 'h006A,
+	'h00C6, 'h0121, 'h0140, 'h0520, 'h2500, 'h0000, 'h0000, 'h0000,
+	'h56B5, 'h6D62, 'h7D08, 'h7C8E, 'h6474, 'h3C76, 'h10D6, 'h0133,
+	'h01AD, 'h0207, 'h0241, 'h1A20, 'h45E0, 'h0000, 'h0000, 'h0000,
+	'h7FFF, 'h7ECC, 'h7E52, 'h7DD8, 'h7DBE, 'h65BF, 'h3A1F, 'h127D,
+	'h02F7, 'h0371, 'h1B8B, 'h4388, 'h6F29, 'h2529, 'h0000, 'h0000,
+	'h7FFF, 'h7F78, 'h7F5A, 'h7F3D, 'h7F1F, 'h771F, 'h633F, 'h537E,
+	'h4B9C, 'h4BB9, 'h57D7, 'h67D6, 'h7BB6, 'h5EF7, 'h0000, 'h0000
+};
+
+// Greyscale
+wire [15:0] pal_greyscale_lut[64] = '{
+	'h39CE, 'h1CE7, 'h18C6, 'h14A5, 'h1CE7, 'h18C6, 'h18C6, 'h0842,
+	'h0C63, 'h1CE7, 'h2108, 'h1CE7, 'h1CE7, 'h0000, 'h0421, 'h0421,
+	'h5AD6, 'h3DEF, 'h35AD, 'h318C, 'h39CE, 'h35AD, 'h35AD, 'h318C,
+	'h39CE, 'h3DEF, 'h4631, 'h4210, 'h3DEF, 'h18C6, 'h0421, 'h0421,
+	'h7BDE, 'h5EF7, 'h5294, 'h4A52, 'h5294, 'h4E73, 'h5294, 'h56B5,
+	'h5AD6, 'h5EF7, 'h6739, 'h6318, 'h6318, 'h318C, 'h0421, 'h0421,
+	'h7BDE, 'h77BD, 'h6F7B, 'h6739, 'h6739, 'h6739, 'h6739, 'h6B5A,
+	'h6F7B, 'h6F7B, 'h6F7B, 'h6F7B, 'h6F7B, 'h5EF7, 'h0421, 'h0421
+};
+
+// Rockman9 Palette
+wire [15:0] pal_rockman9_lut[64] = '{
+	'h39CE, 'h5400, 'h4464, 'h4C08, 'h3811, 'h0815, 'h0014, 'h002F,
+	'h00A8, 'h0100, 'h0140, 'h08E0, 'h2CE3, 'h0000, 'h0000, 'h0000,
+	'h5EF7, 'h75C0, 'h74E4, 'h7810, 'h5C17, 'h2C1C, 'h00BB, 'h0539,
+	'h01D1, 'h0240, 'h02A0, 'h1E40, 'h4600, 'h0000, 'h0000, 'h0000,
+	'h7FFF, 'h7EE7, 'h7E4B, 'h7E34, 'h7DFE, 'h59DF, 'h31DF, 'h1E7F,
+	'h1EFE, 'h0B50, 'h2769, 'h4FEB, 'h6FA0, 'h294A, 'h0000, 'h0000,
+	'h7FFF, 'h7F95, 'h7F58, 'h7F3A, 'h7F1F, 'h6F1F, 'h5AFF, 'h577F,
+	'h539F, 'h53FC, 'h5FD5, 'h67F6, 'h7BF3, 'h4E73, 'h0000, 'h0000
+};
+
+// Nintendulator NTSC
+wire [15:0] pal_nintendulator_lut[64] = '{
+	'h318C, 'h4CA0, 'h6022, 'h5C07, 'h440C, 'h200F, 'h000F, 'h006C,
+	'h00E6, 'h0121, 'h0160, 'h0140, 'h2900, 'h0000, 'h0000, 'h0000,
+	'h56B5, 'h7980, 'h7CE7, 'h7C6F, 'h7035, 'h4059, 'h08B9, 'h0134,
+	'h01CD, 'h0246, 'h0260, 'h1660, 'h4E00, 'h0000, 'h0000, 'h0000,
+	'h7FFF, 'h7ECA, 'h7E31, 'h7DB9, 'h7D7F, 'h699F, 'h31FF, 'h027F,
+	'h0318, 'h0390, 'h0BC9, 'h3FA6, 'h7746, 'h2529, 'h0000, 'h0000,
+	'h7FFF, 'h7F77, 'h7F5A, 'h7F1D, 'h7EFF, 'h76FF, 'h633F, 'h4F5F,
+	'h439C, 'h43D9, 'h53F6, 'h67F5, 'h7BB5, 'h5AD6, 'h0000, 'h0000
+};
+
+wire [14:0] mem_data;
+
+spram #(.addr_width(6), .data_width(15), .mem_name("pal"), .mem_init_file("tao.mif")) pal_ram
+(
+	.clock(clk),
+	.address(load_color ? load_color_index : color_ef),
+	.data(load_color_data),
+	.wren(load_color),
+	.q(mem_data)
+);
+
 reg [14:0] pixel;
 reg HBlank_r, VBlank_r;
 
@@ -136,15 +229,22 @@ always @(posedge clk) begin
 	
 	if(pix_ce_n) begin
 		case (palette)
-			0: pixel <= pal_smooth_lut[color][14:0];
-			1: pixel <= pal_unsat_lut[color][14:0];
-			2: pixel <= pal_fcelut[color][14:0];
-			3: pixel <= pal_nes_classic_lut[color][14:0];
-			4: pixel <= pal_composite_direct_lut[color][14:0];
-			5: pixel <= pal_pc10_lut[color][14:0];
-			6: pixel <= pal_pvm_lut[color][14:0];
-			7: pixel <= pal_wavebeam_lut[color][14:0];
-			default:pixel <= pal_smooth_lut[color][14:0];
+			0: pixel <= pal_smooth_lut[color_ef][14:0];
+			1: pixel <= pal_unsat_lut[color_ef][14:0];
+			2: pixel <= pal_fcelut[color_ef][14:0];
+			3: pixel <= pal_nes_classic_lut[color_ef][14:0];
+			4: pixel <= pal_composite_direct_lut[color_ef][14:0];
+			5: pixel <= pal_pc10_lut[color_ef][14:0];
+			6: pixel <= pal_pvm_lut[color_ef][14:0];
+			7: pixel <= pal_wavebeam_lut[color_ef][14:0];
+			8: pixel <= pal_real_lut[color_ef][14:0];
+			9: pixel <= pal_sonycxa_lut[color_ef][14:0];
+			10: pixel <= pal_yuv_lut[color_ef][14:0];
+			11: pixel <= pal_greyscale_lut[color_ef][14:0];
+			12: pixel <= pal_rockman9_lut[color_ef][14:0];
+			13: pixel <= pal_nintendulator_lut[color_ef][14:0];
+			14: pixel <= mem_data;
+			default:pixel <= pal_smooth_lut[color_ef][14:0];
 		endcase
 	
 		HBlank_r <= HBlank;
@@ -156,11 +256,16 @@ end
 reg  HBlank, VBlank, HSync, VSync;
 reg  [9:0] h, v;
 reg  [1:0] free_sync = 0;
-wire [9:0] hc = (&free_sync) ? h : count_h;
-wire [9:0] vc = (&free_sync) ? v : count_v;
+wire [9:0] hc = (&free_sync | reset) ? h : count_h;
+wire [9:0] vc = (&free_sync | reset) ? v : count_v;
+wire [9:0] vsync_start = (pal_video ? 10'd270 : 10'd243);
 
 always @(posedge clk) begin
 	reg [8:0] old_count_v;
+	if (h == 0 && v == 0)
+		hold_reset <= 1'b0;
+	else if (reset)
+		hold_reset <= 1'b1;
 
 	if(pix_ce_n) begin
 		if((old_count_v == 511) && (count_v == 0)) begin
@@ -170,7 +275,7 @@ always @(posedge clk) begin
 		end else begin
 			if(h == 340) begin
 				h <= 0;
-				if(v == 261) begin
+				if(v == (pal_video ? 311 : 261)) begin
 					v <= 0;
 					if(~&free_sync) free_sync <= free_sync + 1'd1;
 				end else begin
@@ -184,27 +289,64 @@ always @(posedge clk) begin
 		old_count_v <= count_v;
 	end
 
+	// The NES and SNES proper resolutions are 280 pixels wide, and 240 lines high. Only 256 of these pixels per line
+	// are drawn with image data, but the real PPU padded the rest with color 0 to make the aspect ratio correct, since
+	// they anticipated the overscan. This padding MUST be considered when scaling the image to 4:3 AR.
+	// http://wiki.nesdev.com/w/index.php?title=Overscan#For_emulator_developers
+
+	// Overscan is simply a zoom-in, and most emulators will take off 8 from the top and bottom to reach the magic
+	// number of 224 pixels, so we take off a proportional percentage from the sides to compensate.
+
 	if(pix_ce) begin
 		if(hide_overscan) begin
-			HBlank <= (hc > (256-8)) || (hc<7);
-			VBlank <= (vc > (240-10)) || (vc<7);
+			HBlank <= (hc >= HBL_START && hc <= HBL_END);                  // 280 - ((224/240) * 16) = 261.3
+			VBlank <= (vc > (VBL_START - 9)) || (vc < 8);                  // 240 - 16 = 224
 		end else begin
-			HBlank <= (hc >= 256);
-			VBlank <= (vc >= 240);
+			HBlank <= (hc >= HBL_START) && (hc <= HBL_END);                // 280 pixels
+			VBlank <= (vc >= VBL_START);                                   // 240 lines
 		end
-		HSync  <= ((hc >= 277) && (hc < 302));
-		VSync  <= ((vc >= 242) && (vc < 245));
+		
+		if(hc == 278) begin
+			HSync <= 1;
+			VSync <= ((vc >= vsync_start) && (vc < vsync_start+3));
+		end
+
+		if(hc == 303) HSync <= 0;
 	end
 end
 
-wire  [4:0] vga_r = pixel[4:0];
-wire  [4:0] vga_g = pixel[9:5];
-wire  [4:0] vga_b = pixel[14:10];
+localparam HBL_START = 256;
+localparam HBL_END   = 340;
+localparam VBL_START = 240;
+localparam VBL_END   = 511;
 
-video_mixer #(.LINE_LENGTH(350), .HALF_DEPTH(0)) video_mixer
+wire is_padding = (hc > 255);
+
+reg dark_r, dark_g, dark_b;
+// bits are in order {B, G, R} for NTSC color emphasis
+// Only effects range $00-$0D, $10-$1D, $20-$2D, and $30-$3D
+always @(posedge clk) if (pix_ce_n) begin
+	{dark_r, dark_g, dark_b} <= 3'b000;
+
+	if ((color_ef[3:0] < 4'hE) && |emphasis) begin
+		if (~&emphasis) begin
+			dark_r <= ~emphasis[0];
+			dark_g <= ~emphasis[1];
+			dark_b <= ~emphasis[2];
+		end else begin
+			{dark_r, dark_g, dark_b} <= 3'b111;
+		end
+	end
+end
+
+wire  [4:0] vga_r = dark_r ? pixel[4:1] + pixel[4:2] : pixel[4:0];
+wire  [4:0] vga_g = dark_g ? pixel[9:6] + pixel[9:7] : pixel[9:5];
+wire  [4:0] vga_b = dark_b ? pixel[14:11] + pixel[14:12] : pixel[14:10];
+
+video_mixer #(260, 0, 1) video_mixer
 (
 	.*,
-	.clk_sys(clk),
+	.clk_vid(clk),
 	.ce_pix(pix_ce),
 	.ce_pix_out(ce_pix),
 	
